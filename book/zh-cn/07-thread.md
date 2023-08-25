@@ -11,7 +11,7 @@ order: 7
 ## 7.1 并行基础
 
 `std::thread` 用于创建一个执行的线程实例，所以它是一切并发编程的基础，使用时需要包含 `<thread>` 头文件，
-它提供了很多基本的线程操作，例如 `get_id()` 来获取所创建线程的线程 ID，使用 `join()` 来加入一个线程等等，例如：
+它提供了很多基本的线程操作，例如 `get_id()` 来获取所创建线程的线程 ID，使用 `join()` 来等待一个线程结束（与该线程汇合）等等，例如：
 
 ```cpp
 #include <iostream>
@@ -33,15 +33,16 @@ C++11 引入了 `mutex` 相关的类，其所有相关的函数都放在 `<mutex
 
 `std::mutex` 是 C++11 中最基本的 `mutex` 类，通过实例化 `std::mutex` 可以创建互斥量，
 而通过其成员函数 `lock()` 可以进行上锁，`unlock()` 可以进行解锁。
-但是在在实际编写代码的过程中，最好不去直接调用成员函数，
+但是在实际编写代码的过程中，最好不去直接调用成员函数，
 因为调用成员函数就需要在每个临界区的出口处调用 `unlock()`，当然，还包括异常。
-这时候 C++11 还为互斥量提供了一个 RAII 语法的模板类 `std::lock_gurad`。
+这时候 C++11 还为互斥量提供了一个 RAII 语法的模板类 `std::lock_guard`。
 RAII 在不失代码简洁性的同时，很好的保证了代码的异常安全性。
 
 在 RAII 用法下，对于临界区的互斥量的创建只需要在作用域的开始部分，例如：
 
 ```cpp
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 int v = 1;
@@ -66,10 +67,10 @@ int main() {
 }
 ```
 
-由于 C++ 保证了所有栈对象在声明周期结束时会被销毁，所以这样的代码也是异常安全的。
+由于 C++ 保证了所有栈对象在生命周期结束时会被销毁，所以这样的代码也是异常安全的。
 无论 `critical_section()` 正常返回、还是在中途抛出异常，都会引发堆栈回退，也就自动调用了 `unlock()`。
 
-而 `std::unique_lock` 则相对于 `std::lock_guard` 出现的，`std::unique_lock` 更加灵活，
+而 `std::unique_lock` 则是相对于 `std::lock_guard` 出现的，`std::unique_lock` 更加灵活，
 `std::unique_lock` 的对象会以独占所有权（没有其他的 `unique_lock` 对象同时拥有某个 `mutex` 对象的所有权）
 的方式管理 `mutex` 对象上的上锁和解锁的操作。所以在并发编程中，推荐使用 `std::unique_lock`。
 
@@ -82,6 +83,7 @@ int main() {
 
 ```cpp
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 int v = 1;
@@ -145,7 +147,8 @@ int main() {
     std::cout << "waiting...";
     result.wait(); // 在此设置屏障，阻塞到期物的完成
     // 输出执行结果
-    std::cout << "done!" << std:: endl << "future result is " << result.get() << std::endl;
+    std::cout << "done!" << std:: endl << "future result is "
+              << result.get() << std::endl;
     return 0;
 }
 ```
@@ -196,7 +199,8 @@ int main() {
             }
             // 短暂取消锁，使得生产者有机会在消费者消费空前继续生产
             lock.unlock();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 消费者慢于生产者
+            // 消费者慢于生产者
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             lock.lock();
             while (!produced_nums.empty()) {
                 std::cout << "consuming " << produced_nums.front() << std::endl;
@@ -258,10 +262,10 @@ int main() {
 }
 ```
 
-从直观上看，`t2` 中 `a = 5;` 这一条语句似乎总在 `flag = 1;` 之前得到执行，而 `t1` 中 `while (flag != 1)` 
+从直观上看，`t2` 中 `a = 5;` 这一条语句似乎总在 `flag = 1;` 之前得到执行，而 `t1` 中 `while (flag != 1)`
 似乎保证了 `std::cout << "b = " << b << std::endl;` 不会再标记被改变前执行。从逻辑上看，似乎 `b` 的值应该等于 5。
 但实际情况远比此复杂得多，或者说这段代码本身属于未定义的行为，因为对于 `a` 和 `flag` 而言，他们在两个并行的线程中被读写，
-出现了竞争。除此之外，即便我们忽略竞争读写，仍然可能收 CPU 的乱序执行，编译器对指令的重排的影响，
+出现了竞争。除此之外，即便我们忽略竞争读写，仍然可能受 CPU 的乱序执行，编译器对指令的重排的影响，
 导致 `a = 5` 发生在 `flag = 1` 之后。从而 `b` 可能输出 0。
 
 ### 原子操作
@@ -275,7 +279,7 @@ int main() {
 这是一组非常强的同步条件，换句话说当最终编译为 CPU 指令时会表现为非常多的指令（我们之后再来看如何实现一个简单的互斥锁）。
 这对于一个仅需原子级操作（没有中间态）的变量，似乎太苛刻了。
 
-关于同步条件的研究有着非常久远的历史，我们在这里不进行赘述。读者应该明白，在现代 CPU 体系结构下提供了 CPU 指令级的原子操作，
+关于同步条件的研究有着非常久远的历史，我们在这里不进行赘述。读者应该明白，现代 CPU 体系结构提供了 CPU 指令级的原子操作，
 因此在 C++11 中多线程下共享变量的读写这一问题上，还引入了 `std::atomic` 模板，使得我们实例化一个原子类型，将一个
 原子类型读写操作从一组指令，最小化到单个 CPU 指令。例如：
 
@@ -309,7 +313,7 @@ int main() {
 }
 ```
 
-当然，并非所有的类型都能提供原子操作，这是因为原子操作的可行性取决于 CPU 的架构以及所实例化的类型结构是否满足该架构对内存对齐
+当然，并非所有的类型都能提供原子操作，这是因为原子操作的可行性取决于具体的 CPU 架构，以及所实例化的类型结构是否能够满足该 CPU 架构对内存对齐
 条件的要求，因而我们总是可以通过 `std::atomic<T>::is_lock_free` 来检查该原子类型是否需支持原子操作，例如：
 
 ```cpp
@@ -321,6 +325,8 @@ struct A {
     int y;
     long long z;
 };
+
+int main() {
     std::atomic<A> a;
     std::cout << std::boolalpha << a.is_lock_free() << std::endl;
     return 0;
@@ -404,7 +410,7 @@ struct A {
           y.load()            c = a + b  x.store(3)
     ```
 
-    上面给出的三种例子都是属于因果一致的，因为整个过程中，只有 `c` 对 `a` 和 `b` 产生依赖，而 `x` 和 `y` 
+    上面给出的三种例子都是属于因果一致的，因为整个过程中，只有 `c` 对 `a` 和 `b` 产生依赖，而 `x` 和 `y`
     在此例子中表现为没有关系（但实际情况中我们需要更详细的信息才能确定 `x` 与 `y` 确实无关）
 
 4. 最终一致性：是最弱的一致性要求，它只保障某个操作在未来的某个时间节点上会被观察到，但并未要求被观察到的时间。因此我们甚至可以对此条件稍作加强，例如规定某个操作被观察到的时间总是有界的。当然这已经不在我们的讨论范围之内了。
@@ -415,7 +421,7 @@ struct A {
 
 
     T2 ---------+------------+--------------------+--------+-------->
-             x.read()      x.read()           x.read()   x.read()
+             x.read      x.read()           x.read()   x.read()
     ```
 
     在上面的情况中，如果我们假设 x 的初始值为 0，则 `T2` 中四次 `x.read()` 结果可能但不限于以下情况：
@@ -424,7 +430,8 @@ struct A {
     3 4 4 4 // x 的写操作被很快观察到
     0 3 3 4 // x 的写操作被观察到的时间存在一定延迟
     0 0 0 4 // 最后一次读操作读到了 x 的最终值，但此前的变化并未观察到
-    0 0 0 0 // 在当前时间段内 x 的写操作均未被观察到，但未来某个时间点上一定能观察到 x 为 4 的情况
+    0 0 0 0 // 在当前时间段内 x 的写操作均未被观察到，
+            // 但未来某个时间点上一定能观察到 x 为 4 的情况
     ```
 
 ### 内存顺序
@@ -437,7 +444,7 @@ struct A {
     std::atomic<int> counter = {0};
     std::vector<std::thread> vt;
     for (int i = 0; i < 100; ++i) {
-        vt.emplace_back([](){
+        vt.emplace_back([&](){
             counter.fetch_add(1, std::memory_order_relaxed);
         });
     }
@@ -451,7 +458,8 @@ struct A {
 2. 释放/消费模型：在此模型中，我们开始限制进程间的操作顺序，如果某个线程需要修改某个值，但另一个线程会对该值的某次操作产生依赖，即后者依赖前者。具体而言，线程 A 完成了三次对 `x` 的写操作，线程 `B` 仅依赖其中第三次 `x` 的写操作，与 `x` 的前两次写行为无关，则当 `A` 主动 `x.release()` 时候（即使用 `std::memory_order_release`），选项 `std::memory_order_consume` 能够确保 `B` 在调用 `x.load()` 时候观察到 `A` 中第三次对 `x` 的写操作。我们来看一个例子：
 
     ```cpp
-    std::atomic<int*> ptr;
+    // 初始化为 nullptr 防止 consumer 线程从野指针进行读取
+    std::atomic<int*> ptr(nullptr);
     int v;
     std::thread producer([&]() {
         int* p = new int(42);
@@ -469,9 +477,9 @@ struct A {
     consumer.join();
     ```
 
-3. 释放/获取模型：在此模型下，我们可以进一步加紧对不同线程间原子操作的顺序的限制，在释放 `std::memory_order_release` 和获取 `std::memory_order_acquire` 之间规定时序，即发生在释放操作之前的**所有**写操作，对其他线程的任何获取操作都是可见的，亦即发生顺序（happens-before）。
+3. 释放/获取模型：在此模型下，我们可以进一步加紧对不同线程间原子操作的顺序的限制，在释放 `std::memory_order_release` 和获取 `std::memory_order_acquire` 之间规定时序，即发生在释放（release）操作之前的**所有**写操作，对其他线程的任何获取（acquire）操作都是可见的，亦即发生顺序（happens-before）。
 
-    可以看到，`std::memory_order_release` 确保了它之后的写行为不会发生在释放操作之前，是一个向后的屏障，而 `std::memory_order_acquire` 确保了它之后的前的写行为，不会发生在该获取操作之后，是一个向前的屏障，对于选项 `std::memory_order_acq_rel` 而言，则结合了这两者的特点，唯一确定了一个内存屏障，使得当前线程对内存的读写不会被重排到此操作的前后。
+    可以看到，`std::memory_order_release` 确保了它之前的写操作不会发生在释放操作之后，是一个向后的屏障（backward），而 `std::memory_order_acquire` 确保了它之前的写行为不会发生在该获取操作之后，是一个向前的屏障（forward）。对于选项 `std::memory_order_acq_rel` 而言，则结合了这两者的特点，唯一确定了一个内存屏障，使得当前线程对内存的读写不会被重排并越过此操作的前后：
 
     我们来看一个例子：
 
@@ -484,9 +492,8 @@ struct A {
     });
     std::thread acqrel([&]() {
         int expected = 1; // must before compare_exchange_strong
-        while(!flag.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+        while(!flag.compare_exchange_strong(expected, 2, std::memory_order_acq_rel))
             expected = 1; // must after compare_exchange_strong
-        }
         // flag has changed to 2
     });
     std::thread acquire([&]() {
@@ -499,7 +506,7 @@ struct A {
     acquire.join();
     ```
 
-    在此例中我们使用了 `compare_exchange_strong`，它便是比较交换原语（Compare-and-swap primitive），它有一个更弱的版本，即 `compare_exchange_weak`，它允许即便交换成功，也仍然返回 `false` 失败。其原因是因为在某些平台上虚假故障导致的，具体而言，当 CPU 进行上下文切换时，另一线程加载同一地址产生的不一致。除此之外，`compare_exchange_strong` 的性能可能稍差于 `compare_exchange_weak`，但大部分情况下，`compare_exchange_strong` 应该被有限考虑。
+    在此例中我们使用了 `compare_exchange_strong` 比较交换原语（Compare-and-swap primitive），它有一个更弱的版本，即 `compare_exchange_weak`，它允许即便交换成功，也仍然返回 `false` 失败。其原因是因为在某些平台上虚假故障导致的，具体而言，当 CPU 进行上下文切换时，另一线程加载同一地址产生的不一致。除此之外，`compare_exchange_strong` 的性能可能稍差于 `compare_exchange_weak`，但大部分情况下，鉴于其使用的复杂度而言，`compare_exchange_weak` 应该被有限考虑。
 
 4. 顺序一致模型：在此模型下，原子操作满足顺序一致性，进而可能对性能产生损耗。可显式的通过 `std::memory_order_seq_cst` 进行指定。最后来看一个例子：
 
@@ -507,7 +514,7 @@ struct A {
     std::atomic<int> counter = {0};
     std::vector<std::thread> vt;
     for (int i = 0; i < 100; ++i) {
-        vt.emplace_back([](){
+        vt.emplace_back([&](){
             counter.fetch_add(1, std::memory_order_seq_cst);
         });
     }
@@ -548,12 +555,12 @@ C++11 语言层提供了并发编程的相关支持，本节简单的介绍了 `
 
 ## 进一步阅读的参考资料
 
-- [C++ 并发编程\(中文版\)](https://www.gitbook.com/book/chenxiaowei/cpp_concurrency_in_action/details)
-- [线程支持库文档](http://en.cppreference.com/w/cpp/thread)
+- [C++ 并发编程\(中文版\)](https://book.douban.com/subject/26386925/)
+- [线程支持库文档](https://en.cppreference.com/w/cpp/thread)
 - Herlihy, M. P., & Wing, J. M. (1990). Linearizability: a correctness condition for concurrent objects. ACM Transactions on Programming Languages and Systems, 12(3), 463–492. https://doi.org/10.1145/78969.78972
 
 ## 许可
 
-<a rel="license" href="http://creativecommons.org/licenses/by-nc-nd/4.0/"><img alt="知识共享许可协议" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-nd/4.0/80x15.png" /></a>
+<a rel="license" href="https://creativecommons.org/licenses/by-nc-nd/4.0/"><img alt="知识共享许可协议" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-nd/4.0/80x15.png" /></a>
 
-本教程由[欧长坤](https://github.com/changkun)撰写，采用[知识共享署名-非商业性使用-禁止演绎 4.0 国际许可协议](http://creativecommons.org/licenses/by-nc-nd/4.0/)许可。项目中代码使用 MIT 协议开源，参见[许可](../../LICENSE)。
+本教程由[欧长坤](https://github.com/changkun)撰写，采用[知识共享署名-非商业性使用-禁止演绎 4.0 国际许可协议](https://creativecommons.org/licenses/by-nc-nd/4.0/)许可。项目中代码使用 MIT 协议开源，参见[许可](../../LICENSE)。

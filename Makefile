@@ -1,22 +1,25 @@
-DOCKER_ENV=changkun/modern-cpp-tutorial:build-env
+NAME=modern-cpp-tutorial
+DOCKER_ENV=changkun/$(NAME):build-env
+TARGET = pdf epub
 LANGS = zh-cn en-us
-ALL_BUILDS = website pdf
+ALL_BUILDS = website $(TARGET)
 
 # dep
 
 all: $(ALL_BUILDS)
 
-pdf: $(LANGS)
-$(LANGS):
-	cd pdf/$@ && make && make clean
-	mkdir -p website/public/modern-cpp/pdf
-	mv pdf/$@/modern-cpp-tutorial.pdf website/public/modern-cpp/pdf/modern-cpp-tutorial-$@.pdf
+$(TARGET): $(LANGS)
+	mkdir -p website/public/modern-cpp/$@/
+	for lang in $^ ; do \
+		cd $@/$${lang} && make && make clean && cd ../..; \
+		mv $@/$${lang}/$(NAME).$@ website/public/modern-cpp/$@/$(NAME)-$${lang}.$@; \
+	done
 
 website:
 	cd website && make
 
 build:
-	docker run --rm -v `pwd`:/modern-cpp-tutorial -it $(DOCKER_ENV) make 
+	docker run --rm -v `pwd`:/$(NAME) $(DOCKER_ENV) make 
 
 # dev
 
